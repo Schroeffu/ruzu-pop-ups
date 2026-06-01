@@ -264,11 +264,14 @@ class RuzuPopup(QDialog):
             # TODO - Handle this better, notify user?
             self.logger.warning('The card you tried to answer is no longer the card being reviewed...')
 
-        self.hide_card()
+        self.hide_popup()
 
-    def hide_card(self):
+    def hide_popup(self):
         self.reset_card()
         self.popup_window.hide()
+
+    def hide_card(self):
+        self.hide_popup()
         current_deck = self.anki_utils.get_config()['deck']
         review_ended = self.anki_utils.move_to_overview_state(current_deck)
         self.logger.info('review_ended: %s' % review_ended)
