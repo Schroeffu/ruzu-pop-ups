@@ -1,11 +1,13 @@
 # Copyright 2020 Charles Henry
 from aqt.webview import AnkiWebView
-from PyQt6 import QtCore
-from aqt import Qt, QWidget, QGridLayout, QPushButton, QDialog, QHBoxLayout, QLineEdit, QLabel
+from PyQt6 import QtCore, QtGui
+from aqt import Qt, QWidget, QGridLayout, QPushButton, QDialog, QHBoxLayout, QLineEdit, QLabel, QMenu
 from ..anki_utils import AnkiUtils
 import logging
 import re
 import html
+import time
+import math
 
 
 class RuzuPopup(QDialog):
@@ -20,6 +22,8 @@ class RuzuPopup(QDialog):
         self.typing_mode = False  # Always start with typing mode OFF
         self.pre_reveal_mode = False
         self.last_typed_answer = ''
+        self.skip_until = 0  # Epoch time until which pop-ups are skipped (in-memory only)
+        self.skip_options = [1, 2, 3, 5, 10, 15, 30, 60, 120, 180]
         self.logger = logging.getLogger(__name__.split('.')[0])
 
         # popup_window (QWidget)
@@ -83,6 +87,22 @@ class RuzuPopup(QDialog):
         self._apply_typing_toggle_ui()
 
         ###
+        # Settings icon (top right corner of the card view)
+        ###
+        self.settings_btn = QPushButton()
+        self.settings_btn.setFixedSize(26, 26)
+        self.settings_btn.setToolTip("Settings")
+        self.settings_btn.setIcon(self._build_gear_icon())
+        self.settings_btn.setIconSize(QtCore.QSize(18, 18))
+        self.settings_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.setStyleSheet(
+            "QPushButton { border: none; background: rgba(0, 0, 0, 0.05);"
+            " border-radius: 13px; }"
+            " QPushButton:hover { background: rgba(0, 0, 0, 0.15); }"
+        )
+        self.settings_btn.clicked.connect(lambda _: self._show_settings_menu())
+
+        ###
         # Layout management - Add objects to main pop-up window
         ###
         parent.grid = self.grid = QGridLayout()
@@ -96,6 +116,10 @@ class RuzuPopup(QDialog):
         self.bottom_wid_2.setLayout(self.bottom_grid_2)  # Used to hide buttons when needed
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.addWidget(self.card_view)
+        self.grid.addWidget(
+            self.settings_btn, 0, 0,
+            QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight
+        )
         self.grid.addLayout(self.bottom_grid, 1, 0)
         self.grid.addWidget(self.feedback_label, 2, 0)
         self.popup_window.setLayout(self.grid)
@@ -109,6 +133,77 @@ class RuzuPopup(QDialog):
         msg_geo = self.popup_window.frameGeometry()
         msg_geo.moveBottomRight(screen_geo)
         self.popup_window.move(msg_geo.topLeft())
+
+    def _build_gear_icon(self):
+        size = 36
+        pixmap = QtGui.QPixmap(size, size)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(70, 70, 70)))
+
+        center = size / 2.0
+        outer_radius = size * 0.42
+        inner_radius = size * 0.30
+        teeth = 8
+
+        # Build a cog shape by alternating between outer and inner radius.
+        path = QtGui.QPainterPath()
+        steps = teeth * 2
+        for i in range(steps + 1):
+            angle = (math.pi * 2.0 * i) / steps
+            radius = outer_radius if i % 2 == 0 else inner_radius
+            x = center + radius * math.cos(angle)
+            y = center + radius * math.sin(angle)
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        path.closeSubpath()
+        painter.drawPath(path)
+
+        # Punch out the centre hole so it reads as a gear.
+        hole_radius = size * 0.14
+        painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_Clear)
+        painter.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.black))
+        painter.drawEllipse(QtCore.QPointF(center, center), hole_radius, hole_radius)
+        painter.end()
+
+        return QtGui.QIcon(pixmap)
+
+    def _format_skip_label(self, minutes):
+        if minutes < 60:
+            return "%d minute%s" % (minutes, "" if minutes == 1 else "s")
+        hours = minutes // 60
+        return "%d hour%s" % (hours, "" if hours == 1 else "s")
+
+    def _show_settings_menu(self):
+        menu = QMenu(self.popup_window)
+        skip_menu = menu.addMenu("Skip pop-ups for...")
+        for minutes in self.skip_options:
+            action = skip_menu.addAction(self._format_skip_label(minutes))
+            action.triggered.connect(
+                lambda checked=False, mins=minutes: self.skip_popups_for(mins)
+            )
+        if time.time() < self.skip_until:
+            remaining = int((self.skip_until - time.time()) / 60) + 1
+            resume = menu.addAction("Resume pop-ups now (~%d min left)" % remaining)
+            resume.triggered.connect(lambda checked=False: self.resume_popups())
+        menu.exec(self.settings_btn.mapToGlobal(self.settings_btn.rect().bottomLeft()))
+
+    def skip_popups_for(self, minutes):
+        self.skip_until = time.time() + minutes * 60
+        self.logger.info(
+            'Skipping pop-ups for %d minutes (until %s)' % (minutes, time.ctime(self.skip_until))
+        )
+        # Dismiss the current pop-up if it is showing.
+        self.hide_popup()
+
+    def resume_popups(self):
+        self.skip_until = 0
+        self.logger.info('Skip cancelled, pop-ups resumed')
 
     def show_show_button(self):
         self.pre_reveal_mode = True
@@ -430,6 +525,10 @@ class RuzuPopup(QDialog):
 
     def show_popup(self):
         self.logger.info('show_popup...')
+        # Honour one-off skip window (in-memory, resets on Anki restart).
+        if time.time() < self.skip_until:
+            self.logger.info('Pop-up skipped, skip active until %s' % time.ctime(self.skip_until))
+            return
         self._clear_feedback()
         # Enter pre reveal state based on user config
         if self.anki_utils.get_config()['click_to_reveal']:
