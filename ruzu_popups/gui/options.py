@@ -66,6 +66,11 @@ class RuzuOptions(QDialog):
         self.enabled_check = QCheckBox()
         self.enabled_check.setChecked(self.config['enabled'])
 
+        # Self-typing mode
+        self.enable_self_typing_check_text = QLabel(text='Enable self-typing mode')
+        self.enable_self_typing_check = QCheckBox()
+        self.enable_self_typing_check.setChecked(self.config.get('enable_self_typing', False))
+
         # OK
         self.ok_btn = QPushButton(text='Save')
         self.ok_btn.clicked.connect(self.update_config)
@@ -90,9 +95,11 @@ class RuzuOptions(QDialog):
         self.grid.addWidget(self.click_to_reveal_check_text, 2, 0)
         self.grid.addWidget(self.enabled_check, 3, 1)
         self.grid.addWidget(self.enabled_check_text, 3, 0)
-        self.grid.addWidget(self.show_card_btn, 4, 1)
-        self.grid.addWidget(self.ok_btn, 5, 0)
-        self.grid.addWidget(self.close_btn, 5, 1)
+        self.grid.addWidget(self.enable_self_typing_check, 4, 1)
+        self.grid.addWidget(self.enable_self_typing_check_text, 4, 0)
+        self.grid.addWidget(self.show_card_btn, 5, 1)
+        self.grid.addWidget(self.ok_btn, 6, 0)
+        self.grid.addWidget(self.close_btn, 6, 1)
         self.setLayout(self.grid)
 
     def update_config(self):
@@ -102,6 +109,7 @@ class RuzuOptions(QDialog):
             "frequency": self.freq_select_map[self.freq_select.currentText()],
             "enabled": self.enabled_check.checkState() == Qt.CheckState.Checked,
             "click_to_reveal": self.click_to_reveal_check.checkState() == Qt.CheckState.Checked,
+            "enable_self_typing": self.enable_self_typing_check.checkState() == Qt.CheckState.Checked,
             "window_location": "bottom_right",
             "show_marked_card_flag": False
         }

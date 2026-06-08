@@ -1,9 +1,11 @@
 # Copyright 2020 Charles Henry
 from aqt.webview import AnkiWebView
 from PyQt6 import QtCore
-from aqt import Qt, QWidget, QGridLayout, QPushButton, QDialog, QHBoxLayout
+from aqt import Qt, QWidget, QGridLayout, QPushButton, QDialog, QHBoxLayout, QLineEdit, QLabel
 from ..anki_utils import AnkiUtils
 import logging
+import re
+import html
 
 
 class RuzuPopup(QDialog):
@@ -13,6 +15,11 @@ class RuzuPopup(QDialog):
         self.anki_utils = AnkiUtils()
         self.current_card_id = None
         self.cur_button_count = 0
+        config = self.anki_utils.get_config()
+        self.enable_self_typing = config.get('enable_self_typing', False)
+        self.typing_mode = False  # Always start with typing mode OFF
+        self.pre_reveal_mode = False
+        self.last_typed_answer = ''
         self.logger = logging.getLogger(__name__.split('.')[0])
 
         # popup_window (QWidget)
@@ -60,6 +67,20 @@ class RuzuPopup(QDialog):
         self.btn.append(QPushButton(text="Reveal Question"))
         self.btn[5].setGeometry(btn_padding, btn_padding, btn_width, btn_height)
         self.btn[5].clicked.connect(lambda _: self.show_question_popup())
+        self.typing_toggle_btn = None
+        self.enable_self_typing = config.get('enable_self_typing', False)
+        if self.enable_self_typing:
+            self.typing_toggle_btn = QPushButton(text="Self-typing: OFF")
+            self.typing_toggle_btn.setMinimumWidth(140)
+            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.clicked.connect(lambda _: self.toggle_typing_mode())
+        self.answer_input = QLineEdit()
+        self.answer_input.setPlaceholderText("Type your answer...")
+        self.answer_input.returnPressed.connect(self.show_answer_popup)
+        self.feedback_label = QLabel()
+        self.feedback_label.setWordWrap(True)
+        self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        self._apply_typing_toggle_ui()
 
         ###
         # Layout management - Add objects to main pop-up window
@@ -76,6 +97,7 @@ class RuzuPopup(QDialog):
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.addWidget(self.card_view)
         self.grid.addLayout(self.bottom_grid, 1, 0)
+        self.grid.addWidget(self.feedback_label, 2, 0)
         self.popup_window.setLayout(self.grid)
 
     def set_card_position(self):
@@ -89,19 +111,32 @@ class RuzuPopup(QDialog):
         self.popup_window.move(msg_geo.topLeft())
 
     def show_show_button(self):
-        for i in range(6):
-            self.bottom_grid_2.addWidget(self.btn[i])  # Remove all buttons
+        self.pre_reveal_mode = True
+        self._clear_bottom_controls()
+        if self.typing_mode:
+            self.bottom_grid.addWidget(self.answer_input)
+            self.answer_input.setFocus()
         self.bottom_grid.addWidget(self.btn[5])
+        if self.typing_toggle_btn:
+            self.bottom_grid.addWidget(self.typing_toggle_btn)
 
     def show_question_button(self):
-        for i in range(6):
-            self.bottom_grid_2.addWidget(self.btn[i])  # Remove all buttons
-        self.bottom_grid.addWidget(self.btn[4])
+        self.pre_reveal_mode = False
+        self._clear_bottom_controls()
+        if self.typing_mode:
+            self.btn[4].setText("Check")
+            self.bottom_grid.addWidget(self.answer_input)
+            self.bottom_grid.addWidget(self.btn[4])
+        else:
+            self.btn[4].setText("Show Answer")
+            self.bottom_grid.addWidget(self.btn[4])
+        if self.typing_toggle_btn:
+            self.bottom_grid.addWidget(self.typing_toggle_btn)
 
     def show_answer_buttons(self):
         # TODO - Take in actual buttons tuple?
-        for i in range(6):
-            self.bottom_grid_2.addWidget(self.btn[i])  # Remove all buttons
+        self.pre_reveal_mode = False
+        self._clear_bottom_controls()
         if self.cur_button_count == 2:
             self.bottom_grid.addWidget(self.btn[0])  # Again
             self.bottom_grid.addWidget(self.btn[2])  # Good
@@ -112,6 +147,201 @@ class RuzuPopup(QDialog):
         else:
             for i in range(4):
                 self.bottom_grid.addWidget(self.btn[i])  # Again, Hard, Good, Easy
+
+    def _clear_bottom_controls(self):
+        for i in range(6):
+            self.bottom_grid_2.addWidget(self.btn[i])  # Remove all buttons
+        if self.typing_toggle_btn:
+            self.bottom_grid_2.addWidget(self.typing_toggle_btn)
+        self.bottom_grid_2.addWidget(self.answer_input)
+
+    def _apply_typing_toggle_ui(self):
+        if not self.typing_toggle_btn:
+            return
+        if self.typing_mode:
+            self.typing_toggle_btn.setText("Self-typing: ON")
+            self.typing_toggle_btn.setToolTip("Self-typing: ON")
+            self.typing_toggle_btn.setStyleSheet("font-weight: bold;")
+        else:
+            self.typing_toggle_btn.setText("Self-typing: OFF")
+            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.setStyleSheet("")
+
+    def _set_feedback(self, evaluation):
+        if evaluation['is_correct'] and not evaluation['accepted_with_one_error']:
+            self.feedback_label.setText('Correct: "%s"' % evaluation['typed'])
+            self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #1c7c35;")
+            return
+
+        if evaluation['accepted_with_one_error']:
+            self.feedback_label.setText(
+                'Almost correct (1 character tolerated).<br>'
+                'Your answer: %s<br>'
+                'Correct answer: %s' % (evaluation['typed_markup'], evaluation['expected_markup'])
+            )
+            self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #9a3412;")
+            return
+
+        self.feedback_label.setText(
+            'Incorrect.<br>'
+            'Your answer: %s<br>'
+            'Correct answer: %s' % (evaluation['typed_markup'], evaluation['expected_markup'])
+        )
+        self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #b42318;")
+
+    def _clear_feedback(self):
+        self.feedback_label.setText('')
+        self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+
+    def _extract_text(self, value):
+        value = self._extract_backside_html(value)
+        # Convert answer HTML to plain text for basic comparison.
+        # Strip style/script content first so CSS does not leak into feedback.
+        cleaned = re.sub(r'<style[^>]*>.*?</style>', ' ', value or '', flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r'<script[^>]*>.*?</script>', ' ', cleaned, flags=re.IGNORECASE | re.DOTALL)
+        no_tags = re.sub(r'<[^>]+>', ' ', cleaned)
+        plain_text = html.unescape(no_tags)
+        return ' '.join(plain_text.split())
+
+    def _extract_backside_html(self, value):
+        html_value = value or ''
+        # Anki separator can be id="answer", id='answer', or id=answer.
+        answer_sep = re.search(r'<hr[^>]*\bid\s*=\s*(["\']?)answer\1[^>]*>', html_value, flags=re.IGNORECASE)
+        if answer_sep:
+            return html_value[answer_sep.end():]
+
+        # Fallback for templates that use plain <hr> without id.
+        generic_sep = re.search(r'<hr\b[^>]*>', html_value, flags=re.IGNORECASE)
+        if generic_sep:
+            return html_value[generic_sep.end():]
+
+        return html_value
+
+    def _normalize_text(self, value):
+        normalized = (value or '').strip().lower()
+        normalized = re.sub(r'\s+', ' ', normalized)
+        return normalized
+
+    def _levenshtein_distance_max_one(self, left, right):
+        # Fast distance check with early exit, only cares about 0/1/>1 edits.
+        if abs(len(left) - len(right)) > 1:
+            return 2
+
+        i = 0
+        j = 0
+        edits = 0
+        while i < len(left) and j < len(right):
+            if left[i] == right[j]:
+                i += 1
+                j += 1
+                continue
+
+            edits += 1
+            if edits > 1:
+                return edits
+
+            if len(left) == len(right):
+                i += 1
+                j += 1
+            elif len(left) > len(right):
+                i += 1
+            else:
+                j += 1
+
+        if i < len(left) or j < len(right):
+            edits += 1
+
+        return edits
+
+    def _highlight_diff(self, typed_word, expected_word):
+        typed_html = []
+        expected_html = []
+        max_len = max(len(typed_word), len(expected_word))
+
+        for idx in range(max_len):
+            typed_char = typed_word[idx] if idx < len(typed_word) else ''
+            expected_char = expected_word[idx] if idx < len(expected_word) else ''
+
+            if typed_char == expected_char:
+                if typed_char:
+                    escaped = html.escape(typed_char)
+                    typed_html.append(escaped)
+                    expected_html.append(escaped)
+            else:
+                if typed_char:
+                    typed_html.append('<span style="background:#ffd6d6;">%s</span>' % html.escape(typed_char))
+                if expected_char:
+                    expected_html.append('<span style="background:#d9fbe1;">%s</span>' % html.escape(expected_char))
+
+        return ''.join(typed_html) or '-', ''.join(expected_html) or '-'
+
+    def _evaluate_typed_answer(self, typed_answer, answer_html):
+        typed_norm = self._normalize_text(typed_answer)
+        answer_text = self._extract_text(answer_html)
+        answer_norm = self._normalize_text(answer_text)
+
+        result = {
+            'is_correct': False,
+            'accepted_with_one_error': False,
+            'typed': typed_answer,
+            'typed_markup': html.escape(typed_answer or '-'),
+            'expected_markup': html.escape(answer_text[:120] or '-')
+        }
+
+        if not typed_norm or not answer_norm:
+            return result
+
+        if typed_norm == answer_norm:
+            result['is_correct'] = True
+            result['expected_markup'] = html.escape(answer_text)
+            return result
+
+        best_word = answer_norm
+        best_distance = self._levenshtein_distance_max_one(typed_norm, answer_norm)
+
+        # For single-word input, compare against individual answer words as well.
+        if ' ' not in typed_norm:
+            answer_words = re.findall(r'\w+', answer_norm)
+            for answer_word in answer_words:
+                distance = self._levenshtein_distance_max_one(typed_norm, answer_word)
+                if distance < best_distance:
+                    best_distance = distance
+                    best_word = answer_word
+
+        if best_distance == 0:
+            result['is_correct'] = True
+            typed_markup, expected_markup = self._highlight_diff(typed_norm, best_word)
+            result['typed_markup'] = typed_markup
+            result['expected_markup'] = expected_markup
+            return result
+
+        if best_distance == 1:
+            result['is_correct'] = True
+            result['accepted_with_one_error'] = True
+            typed_markup, expected_markup = self._highlight_diff(typed_norm, best_word)
+            result['typed_markup'] = typed_markup
+            result['expected_markup'] = expected_markup
+            return result
+
+        typed_markup, expected_markup = self._highlight_diff(typed_norm, best_word)
+        result['typed_markup'] = typed_markup
+        result['expected_markup'] = expected_markup
+        return result
+
+    def toggle_typing_mode(self):
+        self.typing_mode = not self.typing_mode
+        self._apply_typing_toggle_ui()
+        self.answer_input.clear()
+        self.logger.debug('typing_mode toggled to %s' % self.typing_mode)
+
+        # Refresh controls in whichever mode is currently displayed.
+        if self.popup_window.isVisible():
+            if self.pre_reveal_mode:
+                self.show_show_button()
+            else:
+                self.show_question_button()
+                if self.typing_mode:
+                    self.answer_input.setFocus()
 
     def reset_card(self):
         self.card_view.setHtml(None)
@@ -169,8 +399,11 @@ class RuzuPopup(QDialog):
 
     def show_answer_popup(self):
         self.logger.info('show_answer_popup...')
+        typed_answer = self.answer_input.text().strip()
+        self.last_typed_answer = typed_answer
         self.popup_window.hide()
         self.pre_popup_validate()
+        self.answer_input.clear()
 
         # TODO - Extra if this fails for some reason
         show_ans_result = self.anki_utils.show_answer()
@@ -183,6 +416,11 @@ class RuzuPopup(QDialog):
             self.show_question_popup()
         else:
             self.cur_button_count = len(current_card['button_list'])
+            if self.typing_mode and typed_answer:
+                evaluation = self._evaluate_typed_answer(typed_answer, current_card['answer'])
+                self._set_feedback(evaluation)
+            else:
+                self._clear_feedback()
             self.show_answer_buttons()
             self.update_card(current_card['answer'])
 
@@ -192,6 +430,7 @@ class RuzuPopup(QDialog):
 
     def show_popup(self):
         self.logger.info('show_popup...')
+        self._clear_feedback()
         # Enter pre reveal state based on user config
         if self.anki_utils.get_config()['click_to_reveal']:
             self.hide_card()
@@ -204,6 +443,15 @@ class RuzuPopup(QDialog):
 
     def show_question_popup(self):
         self.logger.info('show_question_popup...')
+        
+        # Skip re-render if popup is already visible with the same card.
+        if self.popup_window.isVisible() and self.current_card_id is not None:
+            current_card = self.anki_utils.get_current_card()
+            if current_card['card_id'] == self.current_card_id:
+                self.logger.debug('Card already displayed, skipping rerender')
+                return
+        
+        self._clear_feedback()
         self.popup_window.hide()
         self.pre_popup_validate()
         show_q_result = self.anki_utils.show_question()
@@ -219,6 +467,9 @@ class RuzuPopup(QDialog):
         # Show pop-up
         self.set_card_position()
         self.popup_window.show()
+        # Restore focus to answer input if typing mode is active.
+        if self.typing_mode:
+            self.answer_input.setFocus()
 
     def send_answer(self, ease_name):
         # TODO - Clean this up, not elegant at all
