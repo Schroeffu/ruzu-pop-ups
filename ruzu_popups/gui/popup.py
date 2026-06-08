@@ -15,7 +15,9 @@ class RuzuPopup(QDialog):
         self.anki_utils = AnkiUtils()
         self.current_card_id = None
         self.cur_button_count = 0
-        self.typing_mode = False
+        config = self.anki_utils.get_config()
+        self.enable_self_typing = config.get('enable_self_typing', False)
+        self.typing_mode = False  # Always start with typing mode OFF
         self.pre_reveal_mode = False
         self.last_typed_answer = ''
         self.logger = logging.getLogger(__name__.split('.')[0])
@@ -65,10 +67,13 @@ class RuzuPopup(QDialog):
         self.btn.append(QPushButton(text="Reveal Question"))
         self.btn[5].setGeometry(btn_padding, btn_padding, btn_width, btn_height)
         self.btn[5].clicked.connect(lambda _: self.show_question_popup())
-        self.typing_toggle_btn = QPushButton(text="Self-typing: OFF")
-        self.typing_toggle_btn.setMinimumWidth(140)
-        self.typing_toggle_btn.setToolTip("Self-typing: OFF")
-        self.typing_toggle_btn.clicked.connect(lambda _: self.toggle_typing_mode())
+        self.typing_toggle_btn = None
+        self.enable_self_typing = config.get('enable_self_typing', False)
+        if self.enable_self_typing:
+            self.typing_toggle_btn = QPushButton(text="Self-typing: OFF")
+            self.typing_toggle_btn.setMinimumWidth(140)
+            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.clicked.connect(lambda _: self.toggle_typing_mode())
         self.answer_input = QLineEdit()
         self.answer_input.setPlaceholderText("Type your answer...")
         self.answer_input.returnPressed.connect(self.show_answer_popup)
@@ -112,7 +117,8 @@ class RuzuPopup(QDialog):
             self.bottom_grid.addWidget(self.answer_input)
             self.answer_input.setFocus()
         self.bottom_grid.addWidget(self.btn[5])
-        self.bottom_grid.addWidget(self.typing_toggle_btn)
+        if self.typing_toggle_btn:
+            self.bottom_grid.addWidget(self.typing_toggle_btn)
 
     def show_question_button(self):
         self.pre_reveal_mode = False
@@ -124,7 +130,8 @@ class RuzuPopup(QDialog):
         else:
             self.btn[4].setText("Show Answer")
             self.bottom_grid.addWidget(self.btn[4])
-        self.bottom_grid.addWidget(self.typing_toggle_btn)
+        if self.typing_toggle_btn:
+            self.bottom_grid.addWidget(self.typing_toggle_btn)
 
     def show_answer_buttons(self):
         # TODO - Take in actual buttons tuple?
@@ -144,10 +151,13 @@ class RuzuPopup(QDialog):
     def _clear_bottom_controls(self):
         for i in range(6):
             self.bottom_grid_2.addWidget(self.btn[i])  # Remove all buttons
-        self.bottom_grid_2.addWidget(self.typing_toggle_btn)
+        if self.typing_toggle_btn:
+            self.bottom_grid_2.addWidget(self.typing_toggle_btn)
         self.bottom_grid_2.addWidget(self.answer_input)
 
     def _apply_typing_toggle_ui(self):
+        if not self.typing_toggle_btn:
+            return
         if self.typing_mode:
             self.typing_toggle_btn.setText("Self-typing: ON")
             self.typing_toggle_btn.setToolTip("Self-typing: ON")
@@ -433,6 +443,14 @@ class RuzuPopup(QDialog):
 
     def show_question_popup(self):
         self.logger.info('show_question_popup...')
+        
+        # Skip re-render if popup is already visible with the same card.
+        if self.popup_window.isVisible() and self.current_card_id is not None:
+            current_card = self.anki_utils.get_current_card()
+            if current_card['card_id'] == self.current_card_id:
+                self.logger.debug('Card already displayed, skipping rerender')
+                return
+        
         self._clear_feedback()
         self.popup_window.hide()
         self.pre_popup_validate()
@@ -449,6 +467,9 @@ class RuzuPopup(QDialog):
         # Show pop-up
         self.set_card_position()
         self.popup_window.show()
+        # Restore focus to answer input if typing mode is active.
+        if self.typing_mode:
+            self.answer_input.setFocus()
 
     def send_answer(self, ease_name):
         # TODO - Clean this up, not elegant at all
