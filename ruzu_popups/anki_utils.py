@@ -41,6 +41,15 @@ class AnkiUtils:
     def review_is_active(self):
         return self.reviewer().card is not None and self.main_window().state == 'review'
 
+    def user_is_actively_reviewing(self):
+        # True when the user has the Anki main window focused on the review
+        # screen, i.e. they are actively studying a deck themselves.
+        mw = self.main_window()
+        try:
+            return mw.state == 'review' and mw.isActiveWindow()
+        except Exception:
+            return False
+
     def show_question(self):
         if self.review_is_active():
             self.reviewer()._showQuestion()
