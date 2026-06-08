@@ -10,6 +10,9 @@ Cards from your chosen deck will periodically pop up for you to review.
 - Deck select
 - Set how often cards pop up (every 5 mins, 10 mins etc)
 - Currently supports text based Anki decks and models only.
+- Enable self-typing the answer.
+- Choose to suspend popups for (x) minutes, quick dropdown wheel.
+- While Anki is in foreground, all pop-ups are suspended automatically.
 
 ## Future Features
 - Choose pop-up location / size

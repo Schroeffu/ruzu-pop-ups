@@ -529,6 +529,10 @@ class RuzuPopup(QDialog):
         if time.time() < self.skip_until:
             self.logger.info('Pop-up skipped, skip active until %s' % time.ctime(self.skip_until))
             return
+        # Don't interrupt while the user is actively studying a deck in Anki.
+        if self.anki_utils.user_is_actively_reviewing():
+            self.logger.info('Pop-up skipped, user is actively reviewing in Anki')
+            return
         self._clear_feedback()
         # Enter pre reveal state based on user config
         if self.anki_utils.get_config()['click_to_reveal']:
@@ -542,14 +546,17 @@ class RuzuPopup(QDialog):
 
     def show_question_popup(self):
         self.logger.info('show_question_popup...')
-        
+
         # Skip re-render if popup is already visible with the same card.
-        if self.popup_window.isVisible() and self.current_card_id is not None:
+        # Only safe to check when a review is actually active, otherwise
+        # get_current_card() raises (e.g. after a click-to-reveal cycle).
+        if (self.popup_window.isVisible() and self.current_card_id is not None
+                and self.anki_utils.review_is_active()):
             current_card = self.anki_utils.get_current_card()
             if current_card['card_id'] == self.current_card_id:
                 self.logger.debug('Card already displayed, skipping rerender')
                 return
-        
+
         self._clear_feedback()
         self.popup_window.hide()
         self.pre_popup_validate()
