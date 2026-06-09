@@ -14,6 +14,9 @@ Cards from your chosen deck will periodically pop up for you to review.
 - Choose to suspend popups for (x) minutes, quick dropdown wheel.
 - While Anki is in foreground, all pop-ups are suspended automatically.
 - Got a little more time right now? Activate speed mode on the fly, which will make cards pop up continuously until you deactivate it again.
+- Themes:
+
+![slideshow themes gif](themes.gif)
 
 ## Future Features
 - Choose pop-up location / size
