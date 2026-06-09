@@ -68,6 +68,7 @@ class RuzuPopup(QDialog):
         self.last_typed_answer = ''
         self.skip_until = 0  # Epoch time until which pop-ups are skipped (in-memory only)
         self.window_position = None  # Session only; resets when Anki restarts.
+        self.speed_mode = False  # Session only; immediately load next card after answering.
         self.skip_options = [1, 2, 3, 5, 10, 15, 30, 60, 120, 180]
         self.logger = logging.getLogger(__name__.split('.')[0])
 
@@ -167,6 +168,16 @@ class RuzuPopup(QDialog):
         )
 
         ###
+        # Speed Mode icon (instantly load the next card after answering)
+        ###
+        self.speed_btn = QPushButton()
+        self.speed_btn.setFixedSize(26, 26)
+        self.speed_btn.setIconSize(QtCore.QSize(18, 18))
+        self.speed_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.speed_btn.clicked.connect(lambda _: self.toggle_speed_mode())
+        self._apply_speed_toggle_ui()
+
+        ###
         # Layout management - Add objects to main pop-up window
         ###
         parent.grid = self.grid = QGridLayout()
@@ -184,6 +195,7 @@ class RuzuPopup(QDialog):
         self.top_btn_grid.setContentsMargins(0, 4, 4, 0)
         self.top_btn_grid.setSpacing(4)
         self.top_btn_grid.addWidget(self.move_btn)
+        self.top_btn_grid.addWidget(self.speed_btn)
         self.top_btn_grid.addWidget(self.settings_btn)
         self.grid.addLayout(
             self.top_btn_grid, 0, 0,
@@ -192,6 +204,26 @@ class RuzuPopup(QDialog):
         self.grid.addLayout(self.bottom_grid, 1, 0)
         self.grid.addWidget(self.feedback_label, 2, 0)
         self.popup_window.setLayout(self.grid)
+
+        # Timer used to defer the Speed Mode reload by one event-loop turn. Right
+        # after answering, Anki has not yet advanced to the next card, so we must
+        # yield to the event loop before re-rendering. The timer is parented to
+        # popup_window (a real QObject) so it fires reliably.
+        #
+        # IMPORTANT: the timeout is connected via a lambda, NOT directly to
+        # self._speed_reload. RuzuPopup derives from QDialog but never calls
+        # super().__init__(), so it is not an initialised QObject. If a bound
+        # method of such an object is used as a slot, PyQt treats it as a slot on
+        # an (invalid) QObject receiver and Qt silently never delivers the
+        # signal. A lambda's __self__ is a plain Python object, so the call goes
+        # through normally (this is why the answer buttons, which also use
+        # lambdas, work).
+        self._speed_timer = QtCore.QTimer(self.popup_window)
+        self._speed_timer.setSingleShot(True)
+        self._speed_timer.timeout.connect(lambda: self._speed_reload())
+        # Counts how many times _speed_reload has waited for Anki to advance to
+        # the next card (used to cap the polling so it can never loop forever).
+        self._speed_retries = 0
 
     def set_card_position(self):
         # If the user has dragged the pop-up before in this session, restore it.
@@ -277,6 +309,36 @@ class RuzuPopup(QDialog):
         triangle(QtCore.QPointF(c + arm + head, c),
                  QtCore.QPointF(c + arm, c - head),
                  QtCore.QPointF(c + arm, c + head))
+        painter.end()
+
+        return QtGui.QIcon(pixmap)
+
+    def _build_speed_icon(self, active):
+        size = 36
+        pixmap = QtGui.QPixmap(size, size)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        colour = QtGui.QColor(245, 158, 11) if active else QtGui.QColor(70, 70, 70)
+        painter.setBrush(QtGui.QBrush(colour))
+
+        # A simple lightning bolt polygon (scaled to the 36x36 canvas).
+        points = [
+            (21, 3),
+            (9, 20),
+            (17, 20),
+            (15, 33),
+            (27, 16),
+            (19, 16),
+        ]
+        path = QtGui.QPainterPath()
+        path.moveTo(points[0][0], points[0][1])
+        for x, y in points[1:]:
+            path.lineTo(x, y)
+        path.closeSubpath()
+        painter.drawPath(path)
         painter.end()
 
         return QtGui.QIcon(pixmap)
@@ -396,6 +458,29 @@ class RuzuPopup(QDialog):
         if self.typing_toggle_btn:
             self.bottom_grid_2.addWidget(self.typing_toggle_btn)
         self.bottom_grid_2.addWidget(self.answer_input)
+
+    def _apply_speed_toggle_ui(self):
+        active = self.speed_mode
+        self.speed_btn.setIcon(self._build_speed_icon(active))
+        if active:
+            self.speed_btn.setToolTip("Speed Mode: ON")
+            self.speed_btn.setStyleSheet(
+                "QPushButton { border: none; background: rgba(245, 158, 11, 0.25);"
+                " border-radius: 13px; }"
+                " QPushButton:hover { background: rgba(245, 158, 11, 0.40); }"
+            )
+        else:
+            self.speed_btn.setToolTip("Speed Mode: OFF")
+            self.speed_btn.setStyleSheet(
+                "QPushButton { border: none; background: rgba(0, 0, 0, 0.05);"
+                " border-radius: 13px; }"
+                " QPushButton:hover { background: rgba(0, 0, 0, 0.15); }"
+            )
+
+    def toggle_speed_mode(self):
+        self.speed_mode = not self.speed_mode
+        self._apply_speed_toggle_ui()
+        self.logger.debug('speed_mode toggled to %s' % self.speed_mode)
 
     def _apply_typing_toggle_ui(self):
         if not self.typing_toggle_btn:
@@ -669,6 +754,49 @@ class RuzuPopup(QDialog):
             # Show pop-up
             self.set_card_position()
             self.popup_window.show()
+            self._focus_popup()
+
+    def _focus_popup(self):
+        # Keep the frameless, always-on-top popup visually on top. Button clicks
+        # no longer depend on the window being active (see _PopupWindow), so we
+        # only raise it here and avoid aggressively grabbing activation, which
+        # could otherwise interfere with the click currently being processed.
+        if self.popup_window.isVisible():
+            self.popup_window.raise_()
+
+    def _speed_reload(self):
+        # Load the next card for Speed Mode. Right after answering, Anki may not
+        # have advanced to the next card yet. If we re-rendered immediately the
+        # "skip rerender" guard in show_question_popup() would still see the old
+        # card and abort, leaving the pop-up stuck on the answered card. So we
+        # poll: if Anki still reports the just-answered card, wait a moment and
+        # try again (capped so it can never loop forever).
+        if self.current_card_id is not None and self.anki_utils.review_is_active():
+            try:
+                current_card = self.anki_utils.get_current_card()
+            except Exception:
+                current_card = None
+            if current_card is not None and current_card['card_id'] == self.current_card_id:
+                if self._speed_retries < 40:  # ~2s worth of 50ms polls
+                    self._speed_retries += 1
+                    self._speed_timer.start(50)
+                    return
+        self._speed_retries = 0
+
+        # Anki has advanced (or we gave up waiting). Render the next card. Unlike
+        # show_popup() this deliberately ignores the skip window and the "user is
+        # actively reviewing" guard, because right after answering a card Anki's
+        # main window is focused and those guards would otherwise cancel reload.
+        self._clear_feedback()
+        if self.anki_utils.get_config()['click_to_reveal']:
+            self.hide_card()
+            self.prep_card()
+            self.show_show_button()
+            self.set_card_position()
+            self.popup_window.show()
+            self._focus_popup()
+        else:
+            self.show_question_popup()
 
     def show_popup(self):
         self.logger.info('show_popup...')
@@ -688,6 +816,7 @@ class RuzuPopup(QDialog):
             self.show_show_button()
             self.set_card_position()
             self.popup_window.show()
+            self._focus_popup()
         else:
             self.show_question_popup()
 
@@ -705,6 +834,9 @@ class RuzuPopup(QDialog):
                 return
 
         self._clear_feedback()
+        # Hide first so the subsequent show() re-activates the window. On Windows
+        # re-showing a hidden top-level window makes it the foreground/active
+        # window, which is what lets a single click hit the answer buttons.
         self.popup_window.hide()
         self.pre_popup_validate()
         show_q_result = self.anki_utils.show_question()
@@ -720,8 +852,12 @@ class RuzuPopup(QDialog):
         # Show pop-up
         self.set_card_position()
         self.popup_window.show()
-        # Restore focus to answer input if typing mode is active.
+        self._focus_popup()
+        # Restore focus to answer input if typing mode is active. Typing needs
+        # real keyboard focus, so activate the window explicitly here (button
+        # clicks no longer rely on activation, but text input still does).
         if self.typing_mode:
+            self.popup_window.activateWindow()
             self.answer_input.setFocus()
 
     def send_answer(self, ease_name):
@@ -768,7 +904,14 @@ class RuzuPopup(QDialog):
             # TODO - Handle this better, notify user?
             self.logger.warning('The card you tried to answer is no longer the card being reviewed...')
 
-        self.hide_popup()
+        # In Speed Mode, load the next card automatically. The reload is deferred
+        # via a timer so Anki has a chance to advance to the next card first;
+        # _speed_reload() then polls until the new card is actually available.
+        if self.speed_mode:
+            self._speed_retries = 0
+            self._speed_timer.start(50)
+        else:
+            self.hide_popup()
 
     def hide_popup(self):
         self.reset_card()
