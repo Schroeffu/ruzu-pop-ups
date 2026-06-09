@@ -16,24 +16,26 @@ import math
 # priority, so every theme pairs a card background with a strongly contrasting
 # default text colour. THEME_ORDER controls how themes appear in the options
 # drop-down; DEFAULT_THEME is used when the config has no (or an unknown) theme.
-DEFAULT_THEME = "Light"
-THEME_ORDER = ["Light", "Dark", "Sepia", "Solarized Light", "Nord", "High Contrast",
+DEFAULT_THEME = "Classic"
+THEME_ORDER = ["Classic", "Dark", "Sepia", "Solarized Light", "Nord", "High Contrast",
                "macOS", "Windows 11", "Ubuntu"]
 THEMES = {
-    "Light": {
-        "card_bg": "#f0f0f0",
+    # Classic: former "Light" look.
+    "Classic": {
+        "card_bg": "#ffffff",
         "card_fg": "#202020",
-        "window_bg": "#fafafa",
+        "window_bg": "#ffffff",
         "btn_bg": "#ffffff",
         "btn_fg": "#202020",
-        "btn_border": "#c8c8c8",
-        "btn_hover": "#eaeaea",
+        "btn_border": "#d9d9d9",
+        "btn_border_width": "1px",
+        "btn_hover": "#f2f2f2",
         "icon": "#464646",
         "icon_off_tint": "rgba(0, 0, 0, 0.05)",
         "icon_off_hover": "rgba(0, 0, 0, 0.15)",
         "input_bg": "#ffffff",
         "input_fg": "#202020",
-        "input_border": "#c8c8c8",
+        "input_border": "#d9d9d9",
         "feedback_correct": "#1c7c35",
         "feedback_partial": "#9a3412",
         "feedback_incorrect": "#b42318",
@@ -497,7 +499,7 @@ class RuzuPopup(QDialog):
         # Answer / action buttons.
         btn_style = (
             "QPushButton { background: %(bg)s; color: %(fg)s;"
-            " border: 1px solid %(border)s; border-radius: %(radius)s; padding: 6px 12px;"
+            " border: %(border_width)s solid %(border)s; border-radius: %(radius)s; padding: 6px 12px;"
             " font-weight: 500; }"
             " QPushButton:hover { background: %(hover)s; }"
             " QPushButton:pressed { background: %(border)s; }"
@@ -506,6 +508,7 @@ class RuzuPopup(QDialog):
             'bg': theme['btn_bg'],
             'fg': theme['btn_fg'],
             'border': theme['btn_border'],
+            'border_width': theme.get('btn_border_width', '1px'),
             'hover': theme['btn_hover'],
             'radius': theme.get('btn_radius', '6px'),
         }
