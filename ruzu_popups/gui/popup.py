@@ -10,6 +10,50 @@ import time
 import math
 
 
+class _MoveHandle(QPushButton):
+    """Button that drags its target window while the left mouse button is held."""
+
+    def __init__(self, window, on_moved=None, clamp=None):
+        super().__init__()
+        self._window = window
+        self._on_moved = on_moved
+        self._clamp = clamp
+        self._drag_offset = None
+
+    def _move_window(self, point):
+        if self._clamp is not None:
+            point = self._clamp(point)
+        self._window.move(point)
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self._window.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and (
+            event.buttons() & QtCore.Qt.MouseButton.LeftButton
+        ):
+            self._move_window(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if (
+            event.button() == QtCore.Qt.MouseButton.LeftButton
+            and self._drag_offset is not None
+        ):
+            self._drag_offset = None
+            if self._on_moved is not None:
+                self._on_moved()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class RuzuPopup(QDialog):
 
     def __init__(self, parent):
@@ -23,6 +67,7 @@ class RuzuPopup(QDialog):
         self.pre_reveal_mode = False
         self.last_typed_answer = ''
         self.skip_until = 0  # Epoch time until which pop-ups are skipped (in-memory only)
+        self.window_position = None  # Session only; resets when Anki restarts.
         self.skip_options = [1, 2, 3, 5, 10, 15, 30, 60, 120, 180]
         self.logger = logging.getLogger(__name__.split('.')[0])
 
@@ -103,6 +148,25 @@ class RuzuPopup(QDialog):
         self.settings_btn.clicked.connect(lambda _: self._show_settings_menu())
 
         ###
+        # Move handle (drag the pop-up while left mouse button is held)
+        ###
+        self.move_btn = _MoveHandle(
+            self.popup_window,
+            on_moved=self._save_window_position,
+            clamp=self._clamp_to_screens,
+        )
+        self.move_btn.setFixedSize(26, 26)
+        self.move_btn.setToolTip("Move")
+        self.move_btn.setIcon(self._build_move_icon())
+        self.move_btn.setIconSize(QtCore.QSize(18, 18))
+        self.move_btn.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        self.move_btn.setStyleSheet(
+            "QPushButton { border: none; background: rgba(0, 0, 0, 0.05);"
+            " border-radius: 13px; }"
+            " QPushButton:hover { background: rgba(0, 0, 0, 0.15); }"
+        )
+
+        ###
         # Layout management - Add objects to main pop-up window
         ###
         parent.grid = self.grid = QGridLayout()
@@ -116,8 +180,13 @@ class RuzuPopup(QDialog):
         self.bottom_wid_2.setLayout(self.bottom_grid_2)  # Used to hide buttons when needed
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.addWidget(self.card_view)
-        self.grid.addWidget(
-            self.settings_btn, 0, 0,
+        parent.top_btn_grid = self.top_btn_grid = QHBoxLayout()
+        self.top_btn_grid.setContentsMargins(0, 4, 4, 0)
+        self.top_btn_grid.setSpacing(4)
+        self.top_btn_grid.addWidget(self.move_btn)
+        self.top_btn_grid.addWidget(self.settings_btn)
+        self.grid.addLayout(
+            self.top_btn_grid, 0, 0,
             QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight
         )
         self.grid.addLayout(self.bottom_grid, 1, 0)
@@ -125,7 +194,13 @@ class RuzuPopup(QDialog):
         self.popup_window.setLayout(self.grid)
 
     def set_card_position(self):
-        # Move to bottom right of screen
+        # If the user has dragged the pop-up before in this session, restore it.
+        if isinstance(self.window_position, QtCore.QPoint):
+            point = self._clamp_to_screens(self.window_position)
+            self.popup_window.move(point)
+            return
+
+        # Default: move to bottom right of screen
         # https://stackoverflow.com/questions/28322073/move-qmessagebox-to-bottom-right-corner-of-the-screen
         # https://forum.qt.io/topic/134570/qapplication-desktop-screengeometry-not-work-in-qt6
         screen_geometry = self.parent.app.primaryScreen().availableGeometry()
@@ -133,6 +208,78 @@ class RuzuPopup(QDialog):
         msg_geo = self.popup_window.frameGeometry()
         msg_geo.moveBottomRight(screen_geo)
         self.popup_window.move(msg_geo.topLeft())
+
+    def _clamp_to_screens(self, point):
+        # Keep the whole window inside the visible desktop area so it can never
+        # be dragged (or restored) off-screen and become unreachable.
+        app = self.parent.app
+        screen = app.screenAt(point)
+        if screen is None:
+            screen = (
+                self.popup_window.screen()
+                or app.primaryScreen()
+            )
+        area = screen.availableGeometry()
+        win = self.popup_window.frameGeometry()
+
+        max_x = area.right() - win.width() + 1
+        max_y = area.bottom() - win.height() + 1
+        # If the window is larger than the screen, prefer showing the top-left.
+        x = min(max(point.x(), area.left()), max(max_x, area.left()))
+        y = min(max(point.y(), area.top()), max(max_y, area.top()))
+        return QtCore.QPoint(x, y)
+
+    def _save_window_position(self):
+        pos = self.popup_window.pos()
+        self.window_position = QtCore.QPoint(pos.x(), pos.y())
+        self.logger.info('Saved session pop-up position to (%s, %s)' % (pos.x(), pos.y()))
+
+    def _build_move_icon(self):
+        size = 36
+        pixmap = QtGui.QPixmap(size, size)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        pen = QtGui.QPen(QtGui.QColor(70, 70, 70))
+        pen.setWidth(2)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(70, 70, 70)))
+
+        c = size / 2.0
+        arm = size * 0.30   # length of each arm from the centre
+        head = size * 0.10  # half-width / depth of each arrowhead
+
+        # Cross strokes.
+        painter.drawLine(QtCore.QPointF(c, c - arm), QtCore.QPointF(c, c + arm))
+        painter.drawLine(QtCore.QPointF(c - arm, c), QtCore.QPointF(c + arm, c))
+
+        def triangle(tip, left, right):
+            path = QtGui.QPainterPath()
+            path.moveTo(tip)
+            path.lineTo(left)
+            path.lineTo(right)
+            path.closeSubpath()
+            painter.drawPath(path)
+
+        # Up / down / left / right arrowheads.
+        triangle(QtCore.QPointF(c, c - arm - head),
+                 QtCore.QPointF(c - head, c - arm),
+                 QtCore.QPointF(c + head, c - arm))
+        triangle(QtCore.QPointF(c, c + arm + head),
+                 QtCore.QPointF(c - head, c + arm),
+                 QtCore.QPointF(c + head, c + arm))
+        triangle(QtCore.QPointF(c - arm - head, c),
+                 QtCore.QPointF(c - arm, c - head),
+                 QtCore.QPointF(c - arm, c + head))
+        triangle(QtCore.QPointF(c + arm + head, c),
+                 QtCore.QPointF(c + arm, c - head),
+                 QtCore.QPointF(c + arm, c + head))
+        painter.end()
+
+        return QtGui.QIcon(pixmap)
 
     def _build_gear_icon(self):
         size = 36
