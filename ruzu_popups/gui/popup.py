@@ -295,7 +295,7 @@ class RuzuPopup(QDialog):
         # Restore the saved pop-up position from config (persists across Anki
         # restarts). Stored as {"x": int, "y": int}; None/invalid -> default spot.
         self.window_position = self._position_from_config(config.get('window_position'))
-        self.speed_mode = False  # Session only; immediately load next card after answering.
+        self.infinity_mode = False  # Session only; immediately load next card after answering.
         self.skip_options = [1, 2, 3, 5, 10, 15, 30, 60, 120, 180]
         self.logger = logging.getLogger(__name__.split('.')[0])
         # Active visual theme (resolved from config; refreshed on every render).
@@ -426,14 +426,14 @@ class RuzuPopup(QDialog):
         )
 
         ###
-        # Speed Mode icon (instantly load the next card after answering)
+        # Infinity Mode icon (instantly load the next card after answering)
         ###
-        self.speed_btn = QPushButton()
-        self.speed_btn.setFixedSize(26, 26)
-        self.speed_btn.setIconSize(QtCore.QSize(18, 18))
-        self.speed_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.speed_btn.clicked.connect(lambda _: self.toggle_speed_mode())
-        self._apply_speed_toggle_ui()
+        self.infinity_btn = QPushButton()
+        self.infinity_btn.setFixedSize(26, 26)
+        self.infinity_btn.setIconSize(QtCore.QSize(18, 18))
+        self.infinity_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.infinity_btn.clicked.connect(lambda _: self.toggle_infinity_mode())
+        self._apply_infinity_toggle_ui()
 
         ###
         # Layout management - Add objects to main pop-up window
@@ -453,7 +453,7 @@ class RuzuPopup(QDialog):
         self.top_btn_grid.setContentsMargins(0, 4, 4, 0)
         self.top_btn_grid.setSpacing(4)
         self.top_btn_grid.addWidget(self.move_btn)
-        self.top_btn_grid.addWidget(self.speed_btn)
+        self.top_btn_grid.addWidget(self.infinity_btn)
         self.top_btn_grid.addWidget(self.settings_btn)
         self.grid.addLayout(
             self.top_btn_grid, 0, 0,
@@ -468,25 +468,25 @@ class RuzuPopup(QDialog):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.addWidget(self.container)
 
-        # Timer used to defer the Speed Mode reload by one event-loop turn. Right
-        # after answering, Anki has not yet advanced to the next card, so we must
-        # yield to the event loop before re-rendering. The timer is parented to
-        # popup_window (a real QObject) so it fires reliably.
+        # Timer used to defer the Infinity Mode reload by one event-loop turn.
+        # Right after answering, Anki has not yet advanced to the next card, so
+        # we must yield to the event loop before re-rendering. The timer is
+        # parented to popup_window (a real QObject) so it fires reliably.
         #
         # IMPORTANT: the timeout is connected via a lambda, NOT directly to
-        # self._speed_reload. RuzuPopup derives from QDialog but never calls
+        # self._infinity_reload. RuzuPopup derives from QDialog but never calls
         # super().__init__(), so it is not an initialised QObject. If a bound
         # method of such an object is used as a slot, PyQt treats it as a slot on
         # an (invalid) QObject receiver and Qt silently never delivers the
         # signal. A lambda's __self__ is a plain Python object, so the call goes
         # through normally (this is why the answer buttons, which also use
         # lambdas, work).
-        self._speed_timer = QtCore.QTimer(self.popup_window)
-        self._speed_timer.setSingleShot(True)
-        self._speed_timer.timeout.connect(lambda: self._speed_reload())
-        # Counts how many times _speed_reload has waited for Anki to advance to
-        # the next card (used to cap the polling so it can never loop forever).
-        self._speed_retries = 0
+        self._infinity_timer = QtCore.QTimer(self.popup_window)
+        self._infinity_timer.setSingleShot(True)
+        self._infinity_timer.timeout.connect(lambda: self._infinity_reload())
+        # Counts how many times _infinity_reload has waited for Anki to advance
+        # to the next card (used to cap the polling so it can never loop forever).
+        self._infinity_retries = 0
 
         # Apply the configured theme to the window chrome, buttons and icons.
         self._apply_theme()
@@ -609,8 +609,8 @@ class RuzuPopup(QDialog):
         self.move_btn.setIcon(self._build_move_icon(icon_colour))
         self.move_btn.setStyleSheet(icon_btn_style)
 
-        # Speed icon depends on its on/off state, so delegate to its helper.
-        self._apply_speed_toggle_ui()
+        # Infinity icon depends on its on/off state, so delegate to its helper.
+        self._apply_infinity_toggle_ui()
 
         # Card surface background (web page paint colour) follows the theme.
         self._apply_card_view_bg()
@@ -657,8 +657,8 @@ class RuzuPopup(QDialog):
         self.move_btn.setIcon(self._build_move_icon(icon_colour))
         self.move_btn.setStyleSheet("")
 
-        # Speed icon depends on its on/off state, so delegate to its helper.
-        self._apply_speed_toggle_ui()
+        # Infinity icon depends on its on/off state, so delegate to its helper.
+        self._apply_infinity_toggle_ui()
 
         # Card surface background (web page paint colour).
         self._apply_card_view_bg()
@@ -788,34 +788,32 @@ class RuzuPopup(QDialog):
 
         return QtGui.QIcon(pixmap)
 
-    def _build_speed_icon(self, active, color=None):
+    def _build_infinity_icon(self, active, color=None):
         size = 36
         pixmap = QtGui.QPixmap(size, size)
         pixmap.fill(QtCore.Qt.GlobalColor.transparent)
 
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
         if active:
             colour = QtGui.QColor(245, 158, 11)
         else:
             colour = color if color is not None else QtGui.QColor(70, 70, 70)
-        painter.setBrush(QtGui.QBrush(colour))
+        pen = QtGui.QPen(colour)
+        pen.setWidthF(3.4)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
 
-        # A simple lightning bolt polygon (scaled to the 36x36 canvas).
-        points = [
-            (21, 3),
-            (9, 20),
-            (17, 20),
-            (15, 33),
-            (27, 16),
-            (19, 16),
-        ]
+        # Infinity symbol (lemniscate / horizontal figure-eight) as a stroked
+        # path: two lobes crossing in the centre of the 36x36 canvas.
         path = QtGui.QPainterPath()
-        path.moveTo(points[0][0], points[0][1])
-        for x, y in points[1:]:
-            path.lineTo(x, y)
-        path.closeSubpath()
+        path.moveTo(18, 18)
+        path.cubicTo(14, 10, 6, 10, 6, 18)    # centre -> up -> left side
+        path.cubicTo(6, 26, 14, 26, 18, 18)   # left side -> down -> centre
+        path.cubicTo(22, 10, 30, 10, 30, 18)  # centre -> up -> right side
+        path.cubicTo(30, 26, 22, 26, 18, 18)  # right side -> down -> centre
         painter.drawPath(path)
         painter.end()
 
@@ -933,31 +931,31 @@ class RuzuPopup(QDialog):
             self.bottom_grid_2.addWidget(self.typing_toggle_btn)
         self.bottom_grid_2.addWidget(self.answer_input)
 
-    def _apply_speed_toggle_ui(self):
-        active = self.speed_mode
+    def _apply_infinity_toggle_ui(self):
+        active = self.infinity_mode
         theme = self._theme
         icon_colour = QtGui.QColor(theme['icon'])
-        self.speed_btn.setIcon(self._build_speed_icon(active, icon_colour))
+        self.infinity_btn.setIcon(self._build_infinity_icon(active, icon_colour))
         if active:
-            self.speed_btn.setToolTip("Speed Mode: ON")
-            self.speed_btn.setStyleSheet(
+            self.infinity_btn.setToolTip("Infinity Mode: ON")
+            self.infinity_btn.setStyleSheet(
                 "QPushButton { border: none; background: rgba(245, 158, 11, 0.25);"
                 " border-radius: 6px; }"
                 " QPushButton:hover { background: rgba(245, 158, 11, 0.40); }"
             )
         else:
-            self.speed_btn.setToolTip("Speed Mode: OFF")
-            self.speed_btn.setStyleSheet(
+            self.infinity_btn.setToolTip("Infinity Mode: OFF")
+            self.infinity_btn.setStyleSheet(
                 "QPushButton { border: none; background: %s;"
                 " border-radius: 6px; }"
                 " QPushButton:hover { background: %s; }"
                 % (theme['icon_off_tint'], theme['icon_off_hover'])
             )
 
-    def toggle_speed_mode(self):
-        self.speed_mode = not self.speed_mode
-        self._apply_speed_toggle_ui()
-        self.logger.debug('speed_mode toggled to %s' % self.speed_mode)
+    def toggle_infinity_mode(self):
+        self.infinity_mode = not self.infinity_mode
+        self._apply_infinity_toggle_ui()
+        self.logger.debug('infinity_mode toggled to %s' % self.infinity_mode)
 
     def _apply_typing_toggle_ui(self):
         if not self.typing_toggle_btn:
@@ -1431,12 +1429,12 @@ class RuzuPopup(QDialog):
         if self.popup_window.isVisible():
             self.popup_window.raise_()
 
-    def _speed_reload(self):
-        # Load the next card for Speed Mode. Right after answering, Anki may not
-        # have advanced to the next card yet. If we re-rendered immediately the
-        # "skip rerender" guard in show_question_popup() would still see the old
-        # card and abort, leaving the pop-up stuck on the answered card. So we
-        # poll: if Anki still reports the just-answered card, wait a moment and
+    def _infinity_reload(self):
+        # Load the next card for Infinity Mode. Right after answering, Anki may
+        # not have advanced to the next card yet. If we re-rendered immediately
+        # the "skip rerender" guard in show_question_popup() would still see the
+        # old card and abort, leaving the pop-up stuck on the answered card. So
+        # we poll: if Anki still reports the just-answered card, wait a moment and
         # try again (capped so it can never loop forever).
         if self.current_card_id is not None and self.anki_utils.review_is_active():
             try:
@@ -1444,11 +1442,11 @@ class RuzuPopup(QDialog):
             except Exception:
                 current_card = None
             if current_card is not None and current_card['card_id'] == self.current_card_id:
-                if self._speed_retries < 40:  # ~2s worth of 50ms polls
-                    self._speed_retries += 1
-                    self._speed_timer.start(50)
+                if self._infinity_retries < 40:  # ~2s worth of 50ms polls
+                    self._infinity_retries += 1
+                    self._infinity_timer.start(50)
                     return
-        self._speed_retries = 0
+        self._infinity_retries = 0
 
         # Anki has advanced (or we gave up waiting). Render the next card. Unlike
         # show_popup() this deliberately ignores the skip window and the "user is
@@ -1572,12 +1570,12 @@ class RuzuPopup(QDialog):
             # TODO - Handle this better, notify user?
             self.logger.warning('The card you tried to answer is no longer the card being reviewed...')
 
-        # In Speed Mode, load the next card automatically. The reload is deferred
-        # via a timer so Anki has a chance to advance to the next card first;
-        # _speed_reload() then polls until the new card is actually available.
-        if self.speed_mode:
-            self._speed_retries = 0
-            self._speed_timer.start(50)
+        # In Infinity Mode, load the next card automatically. The reload is
+        # deferred via a timer so Anki has a chance to advance to the next card
+        # first; _infinity_reload() then polls until the new card is available.
+        if self.infinity_mode:
+            self._infinity_retries = 0
+            self._infinity_timer.start(50)
         else:
             self.hide_popup()
 
