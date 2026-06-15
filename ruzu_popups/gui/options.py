@@ -70,7 +70,7 @@ class RuzuOptions(QDialog):
         self.enabled_check.setChecked(self.config['enabled'])
 
         # Self-typing mode
-        self.enable_self_typing_check_text = QLabel(text='Enable self-typing mode')
+        self.enable_self_typing_check_text = QLabel(text='Enable Text Input Mode')
         self.enable_self_typing_check = QCheckBox()
         self.enable_self_typing_check.setChecked(self.config.get('enable_self_typing', False))
 

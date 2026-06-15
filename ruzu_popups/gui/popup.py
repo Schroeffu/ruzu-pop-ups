@@ -375,9 +375,9 @@ class RuzuPopup(QDialog):
         self.typing_toggle_btn = None
         self.enable_self_typing = config.get('enable_self_typing', False)
         if self.enable_self_typing:
-            self.typing_toggle_btn = QPushButton(text="Self-typing: OFF")
+            self.typing_toggle_btn = QPushButton(text="Type Answer: Off")
             self.typing_toggle_btn.setMinimumWidth(140)
-            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.setToolTip("Type Answer: Off")
             self.typing_toggle_btn.clicked.connect(lambda _: self.toggle_typing_mode())
         self.answer_input = QLineEdit()
         self.answer_input.setPlaceholderText("Type your answer...")
@@ -962,13 +962,13 @@ class RuzuPopup(QDialog):
             return
         base_style = self._btn_style
         if self.typing_mode:
-            self.typing_toggle_btn.setText("Self-typing: ON")
-            self.typing_toggle_btn.setToolTip("Self-typing: ON")
+            self.typing_toggle_btn.setText("Type Answer: On")
+            self.typing_toggle_btn.setToolTip("Type Answer: On")
             self.typing_toggle_btn.setStyleSheet(
                 base_style + " QPushButton { font-weight: bold; }")
         else:
-            self.typing_toggle_btn.setText("Self-typing: OFF")
-            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.setText("Type Answer: Off")
+            self.typing_toggle_btn.setToolTip("Type Answer: Off")
             self.typing_toggle_btn.setStyleSheet(base_style)
 
     def _set_feedback(self, evaluation):
@@ -1258,9 +1258,9 @@ class RuzuPopup(QDialog):
         # Create or tear down the self-typing toggle button to match the setting,
         # keeping internal state consistent.
         if enabled and self.typing_toggle_btn is None:
-            self.typing_toggle_btn = QPushButton(text="Self-typing: OFF")
+            self.typing_toggle_btn = QPushButton(text="Type Answer: Off")
             self.typing_toggle_btn.setMinimumWidth(140)
-            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.setToolTip("Type Answer: Off")
             self.typing_toggle_btn.clicked.connect(lambda _: self.toggle_typing_mode())
             self._apply_typing_toggle_ui()
         elif not enabled and self.typing_toggle_btn is not None:
