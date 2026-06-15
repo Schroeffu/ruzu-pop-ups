@@ -16,9 +16,14 @@ import math
 # priority, so every theme pairs a card background with a strongly contrasting
 # default text colour. THEME_ORDER controls how themes appear in the options
 # drop-down; DEFAULT_THEME is used when the config has no (or an unknown) theme.
-DEFAULT_THEME = "Classic"
-THEME_ORDER = ["Classic", "Dark", "Sepia", "Solarized Light", "Nord", "High Contrast",
-               "macOS", "Windows 11", "Ubuntu"]
+#
+# NO_THEME is a special entry: it applies *no* custom styling at all, so the
+# pop-up falls back to the native Qt look (standard widget colours), exactly as
+# it behaved before themes were introduced. It is the default.
+NO_THEME = "No Theme"
+DEFAULT_THEME = NO_THEME
+THEME_ORDER = [NO_THEME, "Classic", "Dark", "Sepia", "Solarized Light", "Nord",
+               "High Contrast", "macOS", "Windows 11", "Ubuntu"]
 THEMES = {
     # Classic: former "Light" look.
     "Classic": {
@@ -288,7 +293,10 @@ class RuzuPopup(QDialog):
         self.skip_options = [1, 2, 3, 5, 10, 15, 30, 60, 120, 180]
         self.logger = logging.getLogger(__name__.split('.')[0])
         # Active visual theme (resolved from config; refreshed on every render).
-        self._theme = THEMES.get(config.get('theme', DEFAULT_THEME), THEMES[DEFAULT_THEME])
+        # This is a safe placeholder until _apply_theme() runs at the end of
+        # __init__ (which resolves the real theme, including the dynamic
+        # "No Theme" palette that needs the already-created popup_window).
+        self._theme = THEMES.get(config.get('theme', DEFAULT_THEME), THEMES["Classic"])
         # Base button stylesheet for the current theme. Set properly in
         # _apply_theme(); initialised here because _apply_typing_toggle_ui()
         # (called during widget setup below) reads it before the first render.
@@ -478,9 +486,59 @@ class RuzuPopup(QDialog):
         # Resolve the theme from config every time so changes made in the options
         # dialog take effect on the next pop-up without restarting Anki.
         name = self.anki_utils.get_config().get('theme', DEFAULT_THEME)
-        return THEMES.get(name, THEMES[DEFAULT_THEME])
+        if name in THEMES:
+            return THEMES[name]
+        # NO_THEME (or any unknown value): build a palette from Qt's standard
+        # colours so feedback/card rendering still has valid values to read.
+        return self._no_theme_palette()
+
+    def _is_no_theme(self):
+        # True when the configured theme is "No Theme" (native Qt look) or an
+        # unknown value that should fall back to no styling.
+        name = self.anki_utils.get_config().get('theme', DEFAULT_THEME)
+        return name not in THEMES
+
+    def _no_theme_palette(self):
+        # Derive a theme-shaped dict from the application's current Qt palette so
+        # the pop-up uses the native standard colours (and adapts to a light or
+        # dark Qt theme). Used as the colour source while "No Theme" is active.
+        palette = self.popup_window.palette()
+        role = QtGui.QPalette.ColorRole
+
+        def colour(which):
+            return palette.color(which).name()
+
+        window = colour(role.Window)
+        base = colour(role.Base)
+        text = colour(role.WindowText)
+        button = colour(role.Button)
+        button_text = colour(role.ButtonText)
+        mid = colour(role.Mid)
+        return {
+            "card_bg": base,
+            "card_fg": text,
+            "window_bg": window,
+            "btn_bg": button,
+            "btn_fg": button_text,
+            "btn_border": mid,
+            "btn_hover": button,
+            "icon": text,
+            "icon_off_tint": "transparent",
+            "icon_off_hover": "rgba(127, 127, 127, 0.20)",
+            "input_bg": base,
+            "input_fg": text,
+            "input_border": mid,
+            "feedback_correct": "#1c7c35",
+            "feedback_partial": "#9a3412",
+            "feedback_incorrect": "#b42318",
+            "window_radius": 0,
+        }
 
     def _apply_theme(self):
+        if self._is_no_theme():
+            self._apply_no_theme()
+            return
+
         theme = self._theme = self._current_theme()
 
         # Rounded radii for the window corners (anti-aliased via stylesheet).
@@ -552,6 +610,52 @@ class RuzuPopup(QDialog):
         self.feedback_label.setStyleSheet(
             "font-size: 12px; font-weight: bold; color: %s; padding: 0 12px;" % theme['card_fg']
         )
+
+    def _apply_no_theme(self):
+        # "No Theme": strip all custom widget styling so the pop-up renders in the
+        # native Qt look (default widget colours, square corners), exactly as it
+        # did before themes were added. self._theme still holds a palette-derived
+        # dict so card/feedback rendering has valid colours to read.
+        theme = self._theme = self._no_theme_palette()
+        palette = self.popup_window.palette()
+        role = QtGui.QPalette.ColorRole
+        window = palette.color(role.Window).name()
+        base = palette.color(role.Base).name()
+        text = palette.color(role.WindowText).name()
+
+        # Opaque native window background with square corners (no rounding), and
+        # the standard text colour for child labels.
+        self.container.setStyleSheet(
+            "#ruzuContainer { background: %s; }"
+            " QLabel { color: %s; background: transparent; }"
+            % (window, text)
+        )
+        # Card surface uses the default text-entry background (usually white).
+        self.card_bg_widget.setStyleSheet("#ruzuCardBg { background: %s; }" % base)
+
+        # Native buttons and input: clear stylesheets so Qt/the OS draws them.
+        self._btn_style = ""
+        for b in self.btn:
+            b.setStyleSheet("")
+        if self.typing_toggle_btn:
+            self._apply_typing_toggle_ui()
+        self.answer_input.setStyleSheet("")
+
+        # Top icons in the default text colour on native (transparent) buttons.
+        icon_colour = QtGui.QColor(text)
+        self.settings_btn.setIcon(self._build_gear_icon(icon_colour))
+        self.settings_btn.setStyleSheet("")
+        self.move_btn.setIcon(self._build_move_icon(icon_colour))
+        self.move_btn.setStyleSheet("")
+
+        # Speed icon depends on its on/off state, so delegate to its helper.
+        self._apply_speed_toggle_ui()
+
+        # Card surface background (web page paint colour).
+        self._apply_card_view_bg()
+
+        # Feedback label base style (overridden per result in _set_feedback).
+        self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold;")
 
     def _apply_card_view_bg(self):
         # The web view is translucent: its background is painted by the rounded
