@@ -284,6 +284,12 @@ class RuzuPopup(QDialog):
         # 'question' or 'answer'). Lets us re-render the live pop-up when a
         # setting changes while it is on screen.
         self._display_state = None
+        # Last card content rendered into the web view, so we can repaint it with
+        # the new theme colours when the theme is switched while the pop-up is up.
+        # _last_card_kind is 'prep' (the reveal bell), 'card' (question/answer
+        # html) or None (nothing rendered yet).
+        self._last_card_kind = None
+        self._last_card_html = None
         self.last_typed_answer = ''
         self.skip_until = 0  # Epoch time until which pop-ups are skipped (in-memory only)
         # Restore the saved pop-up position from config (persists across Anki
@@ -1236,6 +1242,21 @@ class RuzuPopup(QDialog):
                 self._render_current_controls()
             except Exception:
                 self.logger.warning('Could not refresh live pop-up controls', exc_info=True)
+            # Repaint the card itself so the new theme's text colour applies
+            # immediately, instead of only on the next pop-up. Kept in its own
+            # try/except so a controls failure can't block the card re-render.
+            try:
+                self._rerender_current_card()
+            except Exception:
+                self.logger.warning('Could not re-render live card', exc_info=True)
+
+    def _rerender_current_card(self):
+        # Re-render the card content currently shown in the web view using the
+        # active theme (its colours are read from self._theme during render).
+        if self._last_card_kind == 'prep':
+            self.prep_card()
+        elif self._last_card_kind == 'card':
+            self.update_card(self._last_card_html)
 
     def _set_self_typing_enabled(self, enabled):
         # Create or tear down the self-typing toggle button to match the setting,
@@ -1272,6 +1293,8 @@ class RuzuPopup(QDialog):
         # Refresh chrome in case the theme changed since the last render.
         self._apply_theme()
         theme = self._theme
+        self._last_card_kind = 'prep'
+        self._last_card_html = None
         # Update card with 'Reveal card' html
         self.card_view.setHtml("""
                     <!doctype html>
@@ -1292,6 +1315,8 @@ class RuzuPopup(QDialog):
         # Refresh chrome in case the theme changed since the last render.
         self._apply_theme()
         theme = self._theme
+        self._last_card_kind = 'card'
+        self._last_card_html = card
         # TODO - Look into using existing AnkiWebView object to render duplicate card with full compatibility
         # Note: the card HTML is concatenated (not %-formatted) so that any '%'
         # characters inside the card content cannot break string formatting.
