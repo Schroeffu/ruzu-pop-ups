@@ -13,7 +13,7 @@ Cards from your chosen deck will periodically pop up for you to review.
 - Enable 'Text Input Mode' to type the word on the backside of your simple Anki card.
 - Choose to suspend popups for (x) minutes
 - While Anki is in foreground, all pop-ups are suspended automatically.
-- Got a little more time right now? Activate infinity mode on the fly, which will make cards pop up continuously until you deactivate it again.
+- Got some extra time? Toggle Infinity Mode to review cards continuously until you turn it off.
 - Themes:
 
 ![slideshow themes gif](themes.gif)
