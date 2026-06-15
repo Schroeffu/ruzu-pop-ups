@@ -19,8 +19,7 @@ Cards from your chosen deck will periodically pop up for you to review.
 ![slideshow themes gif](themes.gif)
 
 ## Future Features
-- Choose pop-up location / size
-- Shortcuts to enable / disable pop-ups or show the next card early
+- Choose size
 - Optional markers for marked and flagged cards
 
 ## Getting Started
