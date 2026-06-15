@@ -275,6 +275,10 @@ class RuzuPopup(QDialog):
         self.enable_self_typing = config.get('enable_self_typing', False)
         self.typing_mode = False  # Always start with typing mode OFF
         self.pre_reveal_mode = False
+        # Which set of bottom controls is currently shown ('pre_reveal',
+        # 'question' or 'answer'). Lets us re-render the live pop-up when a
+        # setting changes while it is on screen.
+        self._display_state = None
         self.last_typed_answer = ''
         self.skip_until = 0  # Epoch time until which pop-ups are skipped (in-memory only)
         # Restore the saved pop-up position from config (persists across Anki
@@ -778,6 +782,7 @@ class RuzuPopup(QDialog):
 
     def show_show_button(self):
         self.pre_reveal_mode = True
+        self._display_state = 'pre_reveal'
         self._clear_bottom_controls()
         if self.typing_mode:
             self.bottom_grid.addWidget(self.answer_input)
@@ -788,6 +793,7 @@ class RuzuPopup(QDialog):
 
     def show_question_button(self):
         self.pre_reveal_mode = False
+        self._display_state = 'question'
         self._clear_bottom_controls()
         if self.typing_mode:
             self.btn[4].setText("Check")
@@ -802,6 +808,7 @@ class RuzuPopup(QDialog):
     def show_answer_buttons(self):
         # TODO - Take in actual buttons tuple?
         self.pre_reveal_mode = False
+        self._display_state = 'answer'
         self._clear_bottom_controls()
         if self.cur_button_count == 2:
             self.bottom_grid.addWidget(self.btn[0])  # Again
@@ -1106,6 +1113,53 @@ class RuzuPopup(QDialog):
                 self.show_question_button()
                 if self.typing_mode:
                     self.answer_input.setFocus()
+
+    def apply_config(self):
+        # Apply the currently saved config to this already-running pop-up so that
+        # option changes take effect immediately, without an Anki restart. The
+        # pop-up is created once at add-on load, so values cached in __init__
+        # (e.g. enable_self_typing) would otherwise stay stale until restart.
+        config = self.anki_utils.get_config()
+        self._set_self_typing_enabled(config.get('enable_self_typing', False))
+
+        # Refresh chrome (theme + button styling) for the (possibly new) theme.
+        self._apply_theme()
+
+        # If a pop-up is currently on screen, re-render its controls so a newly
+        # toggled option (e.g. self-typing) shows up right away.
+        if self.popup_window.isVisible():
+            try:
+                self._render_current_controls()
+            except Exception:
+                self.logger.warning('Could not refresh live pop-up controls', exc_info=True)
+
+    def _set_self_typing_enabled(self, enabled):
+        # Create or tear down the self-typing toggle button to match the setting,
+        # keeping internal state consistent.
+        if enabled and self.typing_toggle_btn is None:
+            self.typing_toggle_btn = QPushButton(text="Self-typing: OFF")
+            self.typing_toggle_btn.setMinimumWidth(140)
+            self.typing_toggle_btn.setToolTip("Self-typing: OFF")
+            self.typing_toggle_btn.clicked.connect(lambda _: self.toggle_typing_mode())
+            self._apply_typing_toggle_ui()
+        elif not enabled and self.typing_toggle_btn is not None:
+            button = self.typing_toggle_btn
+            self.typing_toggle_btn = None
+            button.setParent(None)
+            button.deleteLater()
+        if not enabled:
+            # Leaving typing mode behind when the feature is switched off.
+            self.typing_mode = False
+        self.enable_self_typing = enabled
+
+    def _render_current_controls(self):
+        # Re-render whichever set of bottom controls is currently displayed.
+        if self._display_state == 'pre_reveal':
+            self.show_show_button()
+        elif self._display_state == 'question':
+            self.show_question_button()
+        elif self._display_state == 'answer':
+            self.show_answer_buttons()
 
     def reset_card(self):
         self.card_view.setHtml(None)
