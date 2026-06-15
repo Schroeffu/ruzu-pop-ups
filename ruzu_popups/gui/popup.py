@@ -385,6 +385,9 @@ class RuzuPopup(QDialog):
         self.feedback_label = QLabel()
         self.feedback_label.setWordWrap(True)
         self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        # Hidden until a self-typing answer is evaluated, so it does not add an
+        # empty gap below the buttons (a hidden widget takes no layout space).
+        self.feedback_label.setVisible(False)
         self._apply_typing_toggle_ui()
 
         ###
@@ -980,6 +983,7 @@ class RuzuPopup(QDialog):
 
     def _set_feedback(self, evaluation):
         theme = self._theme
+        self.feedback_label.setVisible(True)
         label_colour = self._feedback_line_colour(theme['feedback_incorrect'])
         if evaluation['is_correct'] and not evaluation['accepted_with_one_error']:
             self.feedback_label.setText(
@@ -1062,6 +1066,8 @@ class RuzuPopup(QDialog):
 
     def _clear_feedback(self):
         self.feedback_label.setText('')
+        # Collapse the label so no empty space remains below the buttons.
+        self.feedback_label.setVisible(False)
         self.feedback_label.setStyleSheet(
             "font-size: 12px; font-weight: bold; padding: 0 12px; color: %s;" % self._theme['card_fg'])
 
