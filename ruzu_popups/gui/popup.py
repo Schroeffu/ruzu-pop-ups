@@ -395,8 +395,8 @@ class RuzuPopup(QDialog):
         ###
         self.settings_btn = QPushButton()
         self.settings_btn.setFixedSize(26, 26)
-        self.settings_btn.setToolTip("Settings")
-        self.settings_btn.setIcon(self._build_gear_icon())
+        self.settings_btn.setToolTip("Skip pop-ups for a while")
+        self.settings_btn.setIcon(self._build_sleep_icon())
         self.settings_btn.setIconSize(QtCore.QSize(18, 18))
         self.settings_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setStyleSheet(
@@ -604,7 +604,7 @@ class RuzuPopup(QDialog):
             " QPushButton:hover { background: %s; }"
             % (theme['icon_off_tint'], theme['icon_off_hover'])
         )
-        self.settings_btn.setIcon(self._build_gear_icon(icon_colour))
+        self.settings_btn.setIcon(self._build_sleep_icon(icon_colour))
         self.settings_btn.setStyleSheet(icon_btn_style)
         self.move_btn.setIcon(self._build_move_icon(icon_colour))
         self.move_btn.setStyleSheet(icon_btn_style)
@@ -652,7 +652,7 @@ class RuzuPopup(QDialog):
 
         # Top icons in the default text colour on native (transparent) buttons.
         icon_colour = QtGui.QColor(text)
-        self.settings_btn.setIcon(self._build_gear_icon(icon_colour))
+        self.settings_btn.setIcon(self._build_sleep_icon(icon_colour))
         self.settings_btn.setStyleSheet("")
         self.move_btn.setIcon(self._build_move_icon(icon_colour))
         self.move_btn.setStyleSheet("")
@@ -821,42 +821,34 @@ class RuzuPopup(QDialog):
 
         return QtGui.QIcon(pixmap)
 
-    def _build_gear_icon(self, color=None):
+    def _build_sleep_icon(self, color=None):
+        # "Zzz" sleep glyph: three Z letters of increasing size along a diagonal,
+        # matching the "put pop-ups to sleep for X minutes" function.
         size = 36
         pixmap = QtGui.QPixmap(size, size)
         pixmap.fill(QtCore.Qt.GlobalColor.transparent)
 
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
         icon_colour = color if color is not None else QtGui.QColor(70, 70, 70)
-        painter.setBrush(QtGui.QBrush(icon_colour))
+        painter.setPen(QtGui.QPen(icon_colour))
 
-        center = size / 2.0
-        outer_radius = size * 0.42
-        inner_radius = size * 0.30
-        teeth = 8
-
-        # Build a cog shape by alternating between outer and inner radius.
-        path = QtGui.QPainterPath()
-        steps = teeth * 2
-        for i in range(steps + 1):
-            angle = (math.pi * 2.0 * i) / steps
-            radius = outer_radius if i % 2 == 0 else inner_radius
-            x = center + radius * math.cos(angle)
-            y = center + radius * math.sin(angle)
-            if i == 0:
-                path.moveTo(x, y)
-            else:
-                path.lineTo(x, y)
-        path.closeSubpath()
-        painter.drawPath(path)
-
-        # Punch out the centre hole so it reads as a gear.
-        hole_radius = size * 0.14
-        painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_Clear)
-        painter.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.black))
-        painter.drawEllipse(QtCore.QPointF(center, center), hole_radius, hole_radius)
+        # (font point size, centre x, centre y) for each Z, smallest first.
+        letters = [
+            (8, size * 0.30, size * 0.66),
+            (11, size * 0.50, size * 0.48),
+            (15, size * 0.72, size * 0.28),
+        ]
+        for point_size, cx, cy in letters:
+            font = QtGui.QFont("Segoe UI", point_size)
+            font.setBold(True)
+            painter.setFont(font)
+            metrics = QtGui.QFontMetricsF(font)
+            rect = metrics.boundingRect("Z")
+            x = cx - rect.width() / 2.0 - rect.left()
+            y = cy + rect.height() / 2.0 - rect.bottom()
+            painter.drawText(QtCore.QPointF(x, y), "Z")
         painter.end()
 
         return QtGui.QIcon(pixmap)
