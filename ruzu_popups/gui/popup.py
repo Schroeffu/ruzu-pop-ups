@@ -383,6 +383,7 @@ class RuzuPopup(QDialog):
         self.answer_input.setPlaceholderText("Type your answer...")
         self.answer_input.returnPressed.connect(self.show_answer_popup)
         self.feedback_label = QLabel()
+        self.feedback_label.setObjectName('ruzuFeedback')
         self.feedback_label.setWordWrap(True)
         self.feedback_label.setStyleSheet("font-size: 12px; font-weight: bold;")
         # Hidden until a self-typing answer is evaluated, so it does not add an
@@ -974,18 +975,21 @@ class RuzuPopup(QDialog):
     def _set_feedback(self, evaluation):
         theme = self._theme
         self.feedback_label.setVisible(True)
-        label_colour = self._feedback_line_colour(theme['feedback_incorrect'])
+        # The feedback is shown inside a block painted with the card background
+        # colour (see _feedback_label_style), so it always matches the card above
+        # and stays readable. The text colour signals the result: green when
+        # correct, orange when almost correct, red when incorrect.
         if evaluation['is_correct'] and not evaluation['accepted_with_one_error']:
+            label_colour = self._feedback_line_colour(theme['feedback_correct'])
             self.feedback_label.setText(
                 '<span style="color:%s;">Correct:</span> "%s"' % (
                     label_colour, html.escape(evaluation['typed']))
             )
-            self.feedback_label.setStyleSheet(
-                "font-size: 12px; font-weight: bold; padding: 0 12px; color: %s;"
-                % label_colour)
+            self.feedback_label.setStyleSheet(self._feedback_label_style(label_colour))
             return
 
         if evaluation['accepted_with_one_error']:
+            label_colour = self._feedback_line_colour(theme['feedback_partial'])
             self.feedback_label.setText(
                 '<span style="color:%s;">Almost correct (1 character tolerated).</span><br>'
                 '<span style="color:%s;">Your answer:</span> %s<br>'
@@ -993,11 +997,10 @@ class RuzuPopup(QDialog):
                     label_colour, label_colour, evaluation['typed_markup'],
                     label_colour, evaluation['expected_markup'])
             )
-            self.feedback_label.setStyleSheet(
-                "font-size: 12px; font-weight: bold; padding: 0 12px; color: %s;"
-                % label_colour)
+            self.feedback_label.setStyleSheet(self._feedback_label_style(label_colour))
             return
 
+        label_colour = self._feedback_line_colour(theme['feedback_incorrect'])
         self.feedback_label.setText(
             '<span style="color:%s;">Incorrect.</span><br>'
             '<span style="color:%s;">Your answer:</span> %s<br>'
@@ -1005,25 +1008,43 @@ class RuzuPopup(QDialog):
                 label_colour, label_colour, evaluation['typed_markup'],
                 label_colour, evaluation['expected_markup'])
         )
-        self.feedback_label.setStyleSheet(
-            "font-size: 12px; font-weight: bold; padding: 0 12px; color: %s;"
-            % label_colour)
+        self.feedback_label.setStyleSheet(self._feedback_label_style(label_colour))
+        self.logger.debug(
+            'feedback box set: card_bg=%s text=%s sheet=%s'
+            % (theme['card_bg'], label_colour, self.feedback_label.styleSheet()))
+
+    def _feedback_label_style(self, text_colour):
+        # Style for the feedback block: it uses the theme's *card* background
+        # colour (matching the card surface shown above it) with comfortable
+        # padding and a small inset margin, so it reads as a tidy block. The
+        # corners are rounded when the theme itself is rounded (and square for
+        # "No Theme"), capped so a short block never looks pill-shaped.
+        #
+        # The selector targets the label by objectName (QLabel#ruzuFeedback) so
+        # it beats the container's generic "QLabel { background: transparent; }"
+        # rule (an id selector has higher specificity than a type selector);
+        # otherwise the transparent ancestor rule would hide the block.
+        theme = self._theme
+        radius = min(int(theme.get('window_radius', 0) or 0), 10)
+        return (
+            "QLabel#ruzuFeedback { font-size: 12px; font-weight: bold; color: %s;"
+            " background: %s; border-radius: %dpx;"
+            " padding: 8px 12px; margin: 0 8px 8px 8px; }"
+            % (text_colour, theme['card_bg'], radius)
+        )
 
     def _feedback_line_colour(self, semantic_colour):
-        # A theme can explicitly pin the feedback label colour (useful for
-        # darker chrome variants like Ubuntu where neutral light-grey is best).
-        forced = self._theme.get('feedback_label_fg')
-        if forced:
-            return forced
+        # Keep the semantic colour's hue but nudge its lightness until it has
+        # enough contrast against the card background it now sits on.
         return self._readable_feedback_colour(semantic_colour)
 
     def _readable_feedback_colour(self, hexcolour):
-        # The feedback text sits on the window background (the container), whose
-        # brightness varies a lot between themes (e.g. Ubuntu's dark aubergine).
-        # To guarantee the green/orange/red feedback stays legible in *every*
-        # theme, we keep the colour's hue but nudge its lightness until it has
-        # enough WCAG contrast against the current window background.
-        bg = QtGui.QColor(self._theme['window_bg'])
+        # The feedback text sits inside a block painted with the theme's card
+        # background colour. To guarantee the green/orange/red feedback stays
+        # legible in *every* theme, we keep the colour's hue but nudge its
+        # lightness until it has enough WCAG contrast against that card
+        # background.
+        bg = QtGui.QColor(self._theme['card_bg'])
         fg = QtGui.QColor(hexcolour)
         if not fg.isValid() or not bg.isValid():
             return hexcolour
@@ -1408,13 +1429,17 @@ class RuzuPopup(QDialog):
             self.show_question_popup()
         else:
             self.cur_button_count = len(current_card['button_list'])
+            self.show_answer_buttons()
+            self.update_card(current_card['answer'])
+            # Feedback is set AFTER update_card: update_card() calls _apply_theme()
+            # which rewrites the feedback label's stylesheet, so setting the
+            # feedback block last makes sure its styling (the card-coloured box)
+            # is the one that actually sticks.
             if self.typing_mode and typed_answer:
                 evaluation = self._evaluate_typed_answer(typed_answer, current_card['answer'])
                 self._set_feedback(evaluation)
             else:
                 self._clear_feedback()
-            self.show_answer_buttons()
-            self.update_card(current_card['answer'])
 
             # Show pop-up
             self.set_card_position()
